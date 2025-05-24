@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Life is Beautiful Podcast Generator</title>
+    <style>
+        body {
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .container {
+            background-color: #f9f9f9;
+            border-radius: 8px;
+            padding: 30px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: bold;
+        }
+        .file-input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .submit-btn {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            width: 100%;
+        }
+        .submit-btn:hover {
+            background-color: #2980b9;
+        }
+        .status-container {
+            margin-top: 30px;
+            padding: 20px;
+            border-radius: 4px;
+            background-color: #f5f5f5;
+            display: none;
+        }
+        .progress-bar {
+            height: 20px;
+            background-color: #e0e0e0;
+            border-radius: 10px;
+            margin-top: 10px;
+            overflow: hidden;
+        }
+        .progress {
+            height: 100%;
+            background-color: #2ecc71;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        .download-btn {
+            display: none;
+            background-color: #27ae60;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 15px;
+            text-decoration: none;
+            text-align: center;
+        }
+        .error-message {
+            color: #e74c3c;
+            margin-top: 10px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Life is Beautiful Podcast Generator</h1>
+        
+        <form id="upload-form">
+            <div class="form-group">
+                <label for="markdown-file">メルマガのマークダウンファイルをアップロード:</label>
+                <input type="file" id="markdown-file" name="file" accept=".md,.markdown" class="file-input" required>
+            </div>
+            
+            <button type="submit" class="submit-btn">ポッドキャストを生成</button>
+        </form>
+        
+        <div id="status-container" class="status-container">
+            <h3>処理状況:</h3>
+            <p id="status-text">処理中...</p>
+            
+            <div class="progress-bar">
+                <div id="progress" class="progress"></div>
+            </div>
+            
+            <p id="error-message" class="error-message"></p>
+            
+            <a id="download-btn" class="download-btn" href="#" download>ポッドキャストをダウンロード</a>
+        </div>
+    </div>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const form = document.getElementById('upload-form');
+            const statusContainer = document.getElementById('status-container');
+            const statusText = document.getElementById('status-text');
+            const progressBar = document.getElementById('progress');
+            const downloadBtn = document.getElementById('download-btn');
+            const errorMessage = document.getElementById('error-message');
+            
+            let jobId = null;
+            let statusCheckInterval = null;
+            
+            form.addEventListener('submit', async function(e) {
+                e.preventDefault();
+                
+                const fileInput = document.getElementById('markdown-file');
+                const file = fileInput.files[0];
+                
+                if (!file) {
+                    alert('ファイルを選択してください');
+                    return;
+                }
+                
+                // Create form data
+                const formData = new FormData();
+                formData.append('file', file);
+                
+                try {
+                    // Show status container
+                    statusContainer.style.display = 'block';
+                    statusText.textContent = '処理を開始しています...';
+                    progressBar.style.width = '0%';
+                    downloadBtn.style.display = 'none';
+                    errorMessage.style.display = 'none';
+                    
+                    // Submit file
+                    const response = await fetch('/api/generate-podcast', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    if (!response.ok) {
+                        throw new Error('ファイルのアップロードに失敗しました');
+                    }
+                    
+                    const data = await response.json();
+                    jobId = data.job_id;
+                    
+                    // Start checking status
+                    statusCheckInterval = setInterval(checkStatus, 2000);
+                    
+                } catch (error) {
+                    console.error('Error:', error);
+                    statusText.textContent = 'エラーが発生しました';
+                    errorMessage.textContent = error.message;
+                    errorMessage.style.display = 'block';
+                }
+            });
+            
+            async function checkStatus() {
+                if (!jobId) return;
+                
+                try {
+                    const response = await fetch(`/api/podcast-status/${jobId}`);
+                    
+                    if (!response.ok) {
+                        throw new Error('ステータスの取得に失敗しました');
+                    }
+                    
+                    const data = await response.json();
+                    
+                    // Update progress
+                    progressBar.style.width = `${data.progress * 100}%`;
+                    
+                    // Update status text
+                    switch (data.status) {
+                        case 'queued':
+                            statusText.textContent = '処理待ちです...';
+                            break;
+                        case 'processing':
+                            statusText.textContent = 'ポッドキャストを生成中...';
+                            break;
+                        case 'completed':
+                            statusText.textContent = 'ポッドキャスト生成が完了しました！';
+                            downloadBtn.href = `/api/download-podcast/${jobId}`;
+                            downloadBtn.style.display = 'block';
+                            clearInterval(statusCheckInterval);
+                            break;
+                        case 'failed':
+                            statusText.textContent = '処理に失敗しました';
+                            errorMessage.textContent = data.error || 'エラーが発生しました';
+                            errorMessage.style.display = 'block';
+                            clearInterval(statusCheckInterval);
+                            break;
+                    }
+                    
+                } catch (error) {
+                    console.error('Error checking status:', error);
+                    statusText.textContent = 'ステータスの取得に失敗しました';
+                    errorMessage.textContent = error.message;
+                    errorMessage.style.display = 'block';
+                    clearInterval(statusCheckInterval);
+                }
+            }
+        });
+    </script>
+</body>
+</html>
