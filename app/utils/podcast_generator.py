@@ -1,9 +1,8 @@
-import os
-import base64
 import mimetypes
+import os
 import struct
-import tempfile
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List
+
 from google import genai
 from google.genai import types
 from pydub import AudioSegment
@@ -49,20 +48,22 @@ PODCAST_CREATION_PROMPT = """
 {script}
 """
 
+
 def save_binary_file(file_name: str, data: bytes) -> None:
     """Save binary data to a file."""
     with open(file_name, "wb") as f:
         f.write(data)
     print(f"File saved to: {file_name}")
 
+
 def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
     """
     Generates a WAV file header for the given audio data and parameters.
-    
+
     Args:
         audio_data: The raw audio data as a bytes object.
         mime_type: Mime type of the audio data.
-        
+
     Returns:
         A bytes object representing the WAV file header.
     """
@@ -78,31 +79,32 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
 
     header = struct.pack(
         "<4sI4s4sIHHIIHH4sI",
-        b"RIFF",          # ChunkID
-        chunk_size,       # ChunkSize (total file size - 8 bytes)
-        b"WAVE",          # Format
-        b"fmt ",          # Subchunk1ID
-        16,               # Subchunk1Size (16 for PCM)
-        1,                # AudioFormat (1 for PCM)
-        num_channels,     # NumChannels
-        sample_rate,      # SampleRate
-        byte_rate,        # ByteRate
-        block_align,      # BlockAlign
+        b"RIFF",  # ChunkID
+        chunk_size,  # ChunkSize (total file size - 8 bytes)
+        b"WAVE",  # Format
+        b"fmt ",  # Subchunk1ID
+        16,  # Subchunk1Size (16 for PCM)
+        1,  # AudioFormat (1 for PCM)
+        num_channels,  # NumChannels
+        sample_rate,  # SampleRate
+        byte_rate,  # ByteRate
+        block_align,  # BlockAlign
         bits_per_sample,  # BitsPerSample
-        b"data",          # Subchunk2ID
-        data_size         # Subchunk2Size (size of audio data)
+        b"data",  # Subchunk2ID
+        data_size,  # Subchunk2Size (size of audio data)
     )
     return header + audio_data
+
 
 def parse_audio_mime_type(mime_type: str) -> Dict[str, int]:
     """
     Parses bits per sample and rate from an audio MIME type string.
-    
+
     Assumes bits per sample is encoded like "L16" and rate as "rate=xxxxx".
-    
+
     Args:
         mime_type: The audio MIME type string (e.g., "audio/L16;rate=24000").
-        
+
     Returns:
         A dictionary with "bits_per_sample" and "rate" keys.
     """
@@ -119,174 +121,154 @@ def parse_audio_mime_type(mime_type: str) -> Dict[str, int]:
             except (ValueError, IndexError):
                 pass  # Keep rate as default
         elif param.startswith("audio/L"):
-            try:
+            from contextlib import suppress
+
+            with suppress(ValueError, IndexError):
                 bits_per_sample = int(param.split("L", 1)[1])
-            except (ValueError, IndexError):
-                pass  # Keep bits_per_sample as default if conversion fails
 
     return {"bits_per_sample": bits_per_sample, "rate": rate}
+
 
 class PodcastGenerator:
     def __init__(self, api_key: str):
         """
         Initialize the podcast generator with the Gemini API key.
-        
+
         Args:
             api_key: Gemini API key
         """
         self.client = genai.Client(api_key=api_key)
-        
+
     def generate_script(self, chunk: Dict[str, Any]) -> str:
         """
         Generate a podcast script from a markdown chunk.
-        
+
         Args:
             chunk: Dictionary with 'index' and 'content' keys
-            
+
         Returns:
             Generated podcast script
         """
-        prompt = PODCAST_SCRIPT_PROMPT.format(
-            index=chunk['index'],
-            content=chunk['content']
-        )
-        
+        prompt = PODCAST_SCRIPT_PROMPT.format(index=chunk["index"], content=chunk["content"])
+
         model = "gemini-2.5-pro"
-        response = self.client.models.generate_content(
-            model=model,
-            contents=[types.Content.from_text(prompt)]
-        )
-        
+        response = self.client.models.generate_content(model=model, contents=[types.Content.from_text(prompt)])
+
         return response.text
-    
+
     def generate_audio(self, script: str, output_file: str) -> str:
         """
         Generate audio from a podcast script using Gemini TTS.
-        
+
         Args:
             script: The podcast script
             output_file: Path to save the audio file
-            
+
         Returns:
             Path to the generated audio file
         """
         model = "gemini-2.5-flash-preview-tts"
-        
+
         speaker_config = []
         speakers = {"Minami", "Kaito"}
-        
+
         voice_mapping = {
             "Minami": "Puck",  # Female voice for Minami
-            "Kaito": "Zephyr"  # Male voice for Kaito
+            "Kaito": "Zephyr",  # Male voice for Kaito
         }
-        
+
         for speaker in speakers:
             speaker_config.append(
                 types.SpeakerVoiceConfig(
                     speaker=speaker,
                     voice_config=types.VoiceConfig(
-                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                            voice_name=voice_mapping[speaker]
-                        )
-                    )
+                        prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_mapping[speaker])
+                    ),
                 )
             )
-        
+
         prompt = PODCAST_CREATION_PROMPT.format(script=script)
-        
-        contents = [
-            types.Content(
-                role="user",
-                parts=[types.Part.from_text(text=prompt)]
-            )
-        ]
-        
+
+        contents = [types.Content(role="user", parts=[types.Part.from_text(text=prompt)])]
+
         generate_content_config = types.GenerateContentConfig(
             temperature=1,
             response_modalities=["audio"],
             speech_config=types.SpeechConfig(
-                multi_speaker_voice_config=types.MultiSpeakerVoiceConfig(
-                    speaker_voice_configs=speaker_config
-                )
-            )
+                multi_speaker_voice_config=types.MultiSpeakerVoiceConfig(speaker_voice_configs=speaker_config)
+            ),
         )
-        
+
         for chunk in self.client.models.generate_content_stream(
-            model=model,
-            contents=contents,
-            config=generate_content_config
+            model=model, contents=contents, config=generate_content_config
         ):
-            if (
-                chunk.candidates is None
-                or chunk.candidates[0].content is None
-                or chunk.candidates[0].content.parts is None
-            ):
+            if chunk.candidates is None or chunk.candidates[0].content is None or chunk.candidates[0].content.parts is None:
                 continue
-                
+
             if chunk.candidates[0].content.parts[0].inline_data:
                 inline_data = chunk.candidates[0].content.parts[0].inline_data
                 data_buffer = inline_data.data
                 file_extension = mimetypes.guess_extension(inline_data.mime_type)
-                
+
                 if file_extension is None:
                     file_extension = ".wav"
                     data_buffer = convert_to_wav(inline_data.data, inline_data.mime_type)
-                    
+
                 save_binary_file(f"{output_file}{file_extension}", data_buffer)
                 return f"{output_file}{file_extension}"
             else:
                 print(chunk.text)
-        
+
         return None
-    
+
     def concatenate_audio_files(self, audio_files: List[str], output_file: str) -> str:
         """
         Concatenate multiple audio files into one.
-        
+
         Args:
             audio_files: List of audio file paths
             output_file: Path to save the concatenated audio file
-            
+
         Returns:
             Path to the concatenated audio file
         """
         if not audio_files:
             return None
-            
+
         combined = AudioSegment.from_file(audio_files[0])
-        
+
         for audio_file in audio_files[1:]:
             sound = AudioSegment.from_file(audio_file)
             combined += sound
-            
+
         combined.export(output_file, format="mp3")
         return output_file
-    
+
     def process_markdown_chunks(self, chunks: List[Dict[str, Any]], output_dir: str) -> str:
         """
         Process markdown chunks to generate a complete podcast.
-        
+
         Args:
             chunks: List of dictionaries with 'index' and 'content' keys
             output_dir: Directory to save audio files
-            
+
         Returns:
             Path to the final podcast file
         """
         os.makedirs(output_dir, exist_ok=True)
-        
+
         audio_files = []
         for i, chunk in enumerate(chunks):
             script = self.generate_script(chunk)
-            
+
             temp_file = os.path.join(output_dir, f"chunk_{i}")
             audio_file = self.generate_audio(script, temp_file)
-            
+
             if audio_file:
                 audio_files.append(audio_file)
-        
+
         if audio_files:
             final_podcast = os.path.join(output_dir, "final_podcast.mp3")
             return self.concatenate_audio_files(audio_files, final_podcast)
-            
+
         return None

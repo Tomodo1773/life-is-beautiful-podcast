@@ -16,6 +16,8 @@
 - フロントエンド: HTML, JavaScript
 - AI: Google Gemini 2.5 Pro, Gemini 2.5 Pro TTS
 - 音声処理: pydub
+- パッケージ管理: uv
+- コード品質: ruff (linter & formatter)
 
 ## セットアップ
 
@@ -23,6 +25,7 @@
 
 - Python 3.8以上
 - Gemini API キー
+- uv (パッケージマネージャー)
 
 ### インストール
 
@@ -36,10 +39,16 @@ cd life-is-beautiful-podcast
 2. 依存関係をインストール:
 
 ```bash
-pip install -r requirements.txt
+uv pip install -e ".[dev]"
 ```
 
-3. 環境変数を設定:
+3. pre-commitフックをインストール:
+
+```bash
+pre-commit install
+```
+
+4. 環境変数を設定:
 
 `.env`ファイルを作成し、以下の内容を追加:
 
