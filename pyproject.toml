@@ -7,7 +7,7 @@ name = "life-is-beautiful-podcast"
 version = "0.1.0"
 description = "Generate podcasts from Life is Beautiful newsletter markdown content"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.12"
 license = {text = "MIT"}
 authors = [
     {name = "Tomodo1773", email = "pomo1773@gmail.com"},
@@ -33,7 +33,7 @@ packages = ["app", "tests"]
 
 [tool.ruff]
 line-length = 127
-target-version = "py38"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "B", "UP", "C4", "SIM", "RUF"]
