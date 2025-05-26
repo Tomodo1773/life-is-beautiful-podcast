@@ -1,17 +1,9 @@
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
 [project]
-name = "life-is-beautiful-podcast"
+name = "python-project-template"
 version = "0.1.0"
-description = "Generate podcasts from Life is Beautiful newsletter markdown content"
+description = ""
 readme = "README.md"
 requires-python = ">=3.12"
-license = {text = "MIT"}
-authors = [
-    {name = "Tomodo1773", email = "pomo1773@gmail.com"},
-]
 dependencies = [
     "fastapi>=0.104.1",
     "uvicorn>=0.23.2",
@@ -22,30 +14,13 @@ dependencies = [
     "jinja2>=3.1.2",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
-    "ruff>=0.1.0",
-    "pre-commit>=3.5.0",
+    "pre-commit>=4.2.0",
+    "pytest>=8.3.4",
+    "pytest-asyncio>=0.25.3",
+    "ruff>=0.9.5",
 ]
-
-[tool.hatch.build.targets.wheel]
-packages = ["app", "tests"]
 
 [tool.ruff]
 line-length = 127
-target-version = "py312"
-
-[tool.ruff.lint]
-select = ["E", "F", "I", "N", "W", "B", "UP", "C4", "SIM", "RUF"]
-ignore = []
-
-[tool.ruff.lint.isort]
-known-first-party = ["app"]
-
-[tool.ruff.format]
-quote-style = "double"
-indent-style = "space"
-line-ending = "auto"
-
-[tool.ruff.lint.per-file-ignores]
-"app/utils/podcast_generator.py" = ["RUF001", "E501", "W291"]

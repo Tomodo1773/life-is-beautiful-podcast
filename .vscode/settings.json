@@ -1,0 +1,22 @@
+{
+	"editor.defaultFormatter": "esbenp.prettier-vscode",
+	"editor.formatOnSave": true,
+	"editor.formatOnPaste": true,
+	"editor.codeActionsOnSave": {
+		"source.organizeImports": "explicit",
+		"source.fixAll": "explicit"
+	},
+	"python.defaultInterpreterPath": ".venv/bin/python",
+	"python.terminal.activateEnvironment": false,
+	"[python]": {
+		"editor.tabSize": 4,
+		"editor.defaultFormatter": "charliermarsh.ruff"
+	},
+	"ruff.lineLength": 127,
+	"[toml]": {
+		"editor.defaultFormatter": "tamasfe.even-better-toml"
+	},
+	"python.testing.pytestArgs": ["tests"],
+	"python.testing.unittestEnabled": false,
+	"python.testing.pytestEnabled": true
+}
