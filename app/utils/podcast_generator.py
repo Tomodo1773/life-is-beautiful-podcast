@@ -1,3 +1,5 @@
+import concurrent.futures
+import logging
 import mimetypes
 import os
 import struct
@@ -11,34 +13,75 @@ PODCAST_SCRIPT_PROMPT = """
 エンジニアの中島聡さんのメルマガ「週刊Life is beautiful」からポッドキャスト用の台本を作成したいです。
 以下のルールに従ってPodCast用の台本を生成してください 
 
+## ポッドキャストの内容
 - ベテランエンジニアであり、エンジェル投資家でもあるKaitoとアナウンサーのMinamiの二人がエンジニアの中島聡さんのメルマガ「週刊Life is beautiful」を毎週詳しく、わかりやすく視聴者に紹介する番組
 - スピーカーのキャラクター
 	- Kaito：ベテランエンジニアであり、エンジェル投資家。50代。ニュースでコメンテータなどでも活躍。落ち着いて聡明な話し方をする。
 	- Minami：キー局のアナウンサー。若いが知的な感じ。
 
+## 台本生成するための基礎知識
 
-台本を生成するための基礎知識として以下を提供します。これを踏まえて作成してください。
-
+### 『週刊Life is beautiful』とは
 『週刊Life is beautiful』は、中島聡さんが2011年から発行している有料メールマガジンです。主に「エンジニアのための経営学講座」を中心に、世界に通用するエンジニアになるための勉強法や時間の使い方、最新技術、ITビジネス、ベンチャー、キャリア設計、日米の違いなど幅広い話題を毎週火曜日に配信しています。冷静で分かりやすい筆致と豊富な知見で、読者1万人超の人気を誇ります
 
+### 中島聡さんとは
 中島聡さん（1960年生まれ）は、日本を代表するエンジニア・起業家・エンジェル投資家です。マイクロソフト本社でWindows 95やInternet Explorerの開発責任者を務め、「Windows 95の父」と呼ばれました。2000年に起業したソフトウェア会社Xevoを2019年に売却後、シンギュラリティ・ソサエティ代表として活動。投資家としても、NVIDIAなど将来有望な企業に早くから投資し、自身の著書で「メタトレンド投資」の手法を紹介しています
 
+## ルール
 - 話者ラベルはMinami/Kaitoの２名のみ
 - フィラー（えーっと、うんうん、そうですね等）を適度に挿入する 
 - 区切りごとに[pause 0.6sec]を入れて間を取る 
 - 中島聡さんのメルマガは量が多いため、分割して台本生成が依頼されます。
-	- {メルマガの内容}がindex: STARTのときはポッドキャスト（番組）のオープニングトークから台本を生成してください。「次のコーナーは〜です」みたいな受け渡しは不要です。
-	- {メルマガの内容}がchunk: STARTではないときは、「では、次は～の話題です。」のようにポッドキャスト（番組）の途中に挟まる前提で生成してください。「次のコーナーは〜です」みたいな受け渡しは不要です
-	- {メルマガの内容}がchunk: ENDのときはポッドキャスト（番組）全体のエンディングトークも生成してください。
+	- Index: STARTのときは番組冒頭の原稿をつくるときです。
+        ポッドキャスト（番組）のオープニングトークから台本を生成してください。スムーズに次のコーナーに移るように余計な総括や、次コーナーへの導入は不要です。
+	- Index: STARTでもENDではないときは、番組の途中部分の台本を作成するときです。
+        「では、次は～の話題です。」のようにすでに始めっている番組前提で余計な前振りをせずにスムーズに始めてください。また、スムーズに次のコーナーに移るように余計な総括や、次コーナーへの導入は不要です。
+	- Index: ENDのときは番組のラストパートの原稿を作る時です。
+        ポッドキャスト（番組）全体のエンディングトークも生成してください。
 
+## 出力例
+
+Index: START（番組冒頭の原稿をつくる）のとき
+```
 Minami: さあ、今週もポッドキャストが始まりますね。[pause 0.6sec]
 
 Kaito: そうですね。今週も盛りだくさんな内容ですね。[pause 0.6sec]
 
+Minami: Kaitoさん、今週も早速、中島聡さんのメルマガ「週刊Life is beautiful」を深掘りしていきましょう。[pause 0.6sec] 今週号、まず最初のトピックは何でしょうか？
 
+~
+
+Minami: 以上、XXについてでした。[pause 0.6sec]
+```
+
+IndexがSTARTでもENDでもなく番組途中の原稿の時
+```
+Minami: さあ、次のコーナーは～についてです。[pause 0.6sec]
+
+~
+
+Minami: 以上、XXについてでした。[pause 0.6sec]
+
+```
+
+IndexがENDのとき
+```
+Minami: さあ、次のコーナーはXXについてです。[pause 0.6sec]
+
+~
+
+Minami: それでは、今週の「週刊Life is beautiful拾い読みポッドキャスト」はここまでとさせていただきます。[pause 0.6sec] リスナーの皆さん、最後までお聴きいただき、ありがとうございました。
+
+Kaito: ありがとうございました。
+
+Minami: また来週、お会いしましょう。
+```
+
+
+# 作成する原稿のIndex
 Index: {index}
 
-contents
+## 原稿のもととなるメルマガの内容
 {content}
 """
 
@@ -48,12 +91,15 @@ PODCAST_CREATION_PROMPT = """
 {script}
 """
 
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
 
 def save_binary_file(file_name: str, data: bytes) -> None:
     """Save binary data to a file."""
     with open(file_name, "wb") as f:
         f.write(data)
-    print(f"File saved to: {file_name}")
+    logger.info(f"File saved to: {file_name}")
 
 
 def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
@@ -150,10 +196,10 @@ class PodcastGenerator:
             Generated podcast script
         """
         prompt = PODCAST_SCRIPT_PROMPT.format(index=chunk["index"], content=chunk["content"])
-
-        model = "gemini-2.5-pro"
-        response = self.client.models.generate_content(model=model, contents=[types.Content.from_text(prompt)])
-
+        logger.info(f"Generating script for chunk index: {chunk['index']}")
+        model = "gemini-2.5-flash-preview-05-20"
+        response = self.client.models.generate_content(model=model, contents=[types.Content(parts=[types.Part(text=prompt)])])
+        logger.info(f"Script generated for chunk index: {chunk['index']}")
         return response.text
 
     def generate_audio(self, script: str, output_file: str) -> str:
@@ -173,8 +219,8 @@ class PodcastGenerator:
         speakers = {"Minami", "Kaito"}
 
         voice_mapping = {
-            "Minami": "Puck",  # Female voice for Minami
-            "Kaito": "Zephyr",  # Male voice for Kaito
+            "Minami": "Zephyr",  # Female voice for Minami
+            "Kaito": "Enceladus",  # Male voice for Kaito
         }
 
         for speaker in speakers:
@@ -189,6 +235,15 @@ class PodcastGenerator:
 
         prompt = PODCAST_CREATION_PROMPT.format(script=script)
 
+        # スクリプトもtmp/scripts配下に保存する！
+        scripts_dir = os.path.join("tmp", "scripts")
+        os.makedirs(scripts_dir, exist_ok=True)
+        # output_fileのファイル名部分を使って保存
+        script_filename = os.path.basename(output_file) + ".txt"
+        script_path = os.path.join(scripts_dir, script_filename)
+        with open(script_path, "w", encoding="utf-8") as f:
+            f.write(script)
+
         contents = [types.Content(role="user", parts=[types.Part.from_text(text=prompt)])]
 
         generate_content_config = types.GenerateContentConfig(
@@ -199,6 +254,7 @@ class PodcastGenerator:
             ),
         )
 
+        logger.info("Generating audio for podcast script")
         for chunk in self.client.models.generate_content_stream(
             model=model, contents=contents, config=generate_content_config
         ):
@@ -215,10 +271,12 @@ class PodcastGenerator:
                     data_buffer = convert_to_wav(inline_data.data, inline_data.mime_type)
 
                 save_binary_file(f"{output_file}{file_extension}", data_buffer)
+                logger.info(f"Audio file generated: {output_file}{file_extension}")
                 return f"{output_file}{file_extension}"
             else:
-                print(chunk.text)
+                logger.info(f"Text chunk: {chunk.text}")
 
+        logger.error("Audio generation failed: No audio data returned")
         return None
 
     def concatenate_audio_files(self, audio_files: List[str], output_file: str) -> str:
@@ -233,42 +291,66 @@ class PodcastGenerator:
             Path to the concatenated audio file
         """
         if not audio_files:
+            logger.error("No audio files provided for concatenation")
             return None
 
+        logger.info(f"Concatenating {len(audio_files)} audio files")
         combined = AudioSegment.from_file(audio_files[0])
 
         for audio_file in audio_files[1:]:
             sound = AudioSegment.from_file(audio_file)
             combined += sound
 
-        combined.export(output_file, format="mp3")
+        combined.export(output_file, format="wav")
+        logger.info(f"Concatenated audio file saved: {output_file}")
         return output_file
 
-    def process_markdown_chunks(self, chunks: List[Dict[str, Any]], output_dir: str) -> str:
+    def process_markdown_chunks(self, chunks: List[Dict[str, Any]]) -> str:
         """
         Process markdown chunks to generate a complete podcast.
 
         Args:
             chunks: List of dictionaries with 'index' and 'content' keys
-            output_dir: Directory to save audio files
 
         Returns:
             Path to the final podcast file
         """
-        os.makedirs(output_dir, exist_ok=True)
+        base_output_dir = "tmp"
+        scripts_dir = os.path.join(base_output_dir, "scripts")
+        audio_chunks_dir = os.path.join(base_output_dir, "audio_chunks")
+        final_audio_dir = os.path.join(base_output_dir, "final_audio")
+        os.makedirs(scripts_dir, exist_ok=True)
+        os.makedirs(audio_chunks_dir, exist_ok=True)
+        os.makedirs(final_audio_dir, exist_ok=True)
 
-        audio_files = []
-        for i, chunk in enumerate(chunks):
+        # スクリプト生成も並列でやる！
+        def script_task(args):
+            i, chunk = args
             script = self.generate_script(chunk)
+            script_file = os.path.join(scripts_dir, f"chunk_{i}.txt")
+            with open(script_file, "w", encoding="utf-8") as f:
+                f.write(script)
+            return (i, script)
 
-            temp_file = os.path.join(output_dir, f"chunk_{i}")
-            audio_file = self.generate_audio(script, temp_file)
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            script_results = list(executor.map(script_task, [(i, chunk) for i, chunk in enumerate(chunks)]))
+        # インデックス順に並べ直す
+        script_results.sort(key=lambda x: x[0])
+        scripts = [s for _, s in script_results]
 
-            if audio_file:
-                audio_files.append(audio_file)
+        # TTS（音声生成）も並列でやる！
+        def tts_task(args):
+            i, script = args
+            temp_file = os.path.join(audio_chunks_dir, f"chunk_{i}")
+            return (i, self.generate_audio(script, temp_file))
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            audio_results = list(executor.map(tts_task, [(i, scripts[i]) for i in range(len(scripts))]))
+        # インデックス順に並べ直す
+        audio_results.sort(key=lambda x: x[0])
+        audio_files = [f for _, f in audio_results if f]
 
         if audio_files:
-            final_podcast = os.path.join(output_dir, "final_podcast.mp3")
+            final_podcast = os.path.join(final_audio_dir, "final_podcast.wav")
             return self.concatenate_audio_files(audio_files, final_podcast)
-
         return None

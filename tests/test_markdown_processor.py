@@ -1,6 +1,6 @@
 import unittest
 
-from app.utils.markdown_processor import split_markdown_by_h2
+from app.utils.markdown_processor import split_markdown_advanced, split_markdown_by_h2
 
 
 class TestMarkdownProcessor(unittest.TestCase):
@@ -47,6 +47,42 @@ class TestMarkdownProcessor(unittest.TestCase):
         self.assertEqual(chunks[0]["content"], "## Header 1\n\nContent 1\n\n")
         self.assertEqual(chunks[1]["index"], "END")
         self.assertEqual(chunks[1]["content"], "## Header 2\n\nContent 2")
+
+    def test_split_markdown_advanced_zakkubaran_and_articles(self):
+        markdown = (
+            "# 今週のざっくばらん\n"
+            "\n"
+            "## トピック1\n"
+            "内容1\n"
+            "\n"
+            "## トピック2\n"
+            "内容2\n"
+            "\n"
+            "# 私の目に止まった記事\n"
+            "[リンク1](https://example.com/1)\n"
+            "コメント1\n"
+            "[リンク2](https://example.com/2)\n"
+            "コメント2\n"
+        )
+        chunks = split_markdown_advanced(markdown)
+        self.assertEqual(len(chunks), 4)
+        self.assertEqual(chunks[0]["index"], "START")
+        self.assertIn("トピック1", chunks[0]["content"])
+        self.assertEqual(chunks[1]["index"], "END")
+        self.assertIn("トピック2", chunks[1]["content"])
+        self.assertEqual(chunks[2]["index"], "ARTICLE_0")
+        self.assertIn("リンク1", chunks[2]["content"])
+        self.assertIn("コメント1", chunks[2]["content"])
+        self.assertEqual(chunks[3]["index"], "ARTICLE_1")
+        self.assertIn("リンク2", chunks[3]["content"])
+        self.assertIn("コメント2", chunks[3]["content"])
+
+    def test_split_markdown_advanced_fallback(self):
+        markdown = "# タイトル\n\n本文だけでh2も記事セクションもないよ"
+        chunks = split_markdown_advanced(markdown)
+        self.assertEqual(len(chunks), 1)
+        self.assertEqual(chunks[0]["index"], "START")
+        self.assertIn("本文だけ", chunks[0]["content"])
 
 
 if __name__ == "__main__":
