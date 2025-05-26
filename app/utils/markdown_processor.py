@@ -57,14 +57,27 @@ def split_markdown_advanced(markdown_content: str, save_dir: str = None) -> List
     # もしリンク行が1つもなければ、セクション全体を1chunkに
     if not article_chunks:
         article_chunks.append({"index": "ARTICLE_0", "content": articles_section})
-    chunks = zakkubaran_chunks + article_chunks
+    # index命名規則を統一して通し番号にする
+    all_chunks = zakkubaran_chunks + article_chunks
+    n = len(all_chunks)
+    unified_chunks = []
+    if n == 1:
+        unified_chunks.append({"index": "START", "content": all_chunks[0]["content"]})
+    elif n == 2:
+        unified_chunks.append({"index": "START", "content": all_chunks[0]["content"]})
+        unified_chunks.append({"index": "END", "content": all_chunks[1]["content"]})
+    else:
+        unified_chunks.append({"index": "START", "content": all_chunks[0]["content"]})
+        for i in range(1, n - 1):
+            unified_chunks.append({"index": str(i), "content": all_chunks[i]["content"]})
+        unified_chunks.append({"index": "END", "content": all_chunks[-1]["content"]})
     if save_dir:
         os.makedirs(save_dir, exist_ok=True)
-        for i, chunk in enumerate(chunks):
+        for i, chunk in enumerate(unified_chunks):
             fname = os.path.join(save_dir, f"chunk_{i}.txt")
             with open(fname, "w", encoding="utf-8") as f:
-                f.write(chunk["content"])
-    return chunks
+                f.write(f"[index: {chunk['index']}]\n{chunk['content']}")
+    return unified_chunks
 
 
 def split_markdown_by_h2(markdown_content: str) -> List[Dict[str, Any]]:
