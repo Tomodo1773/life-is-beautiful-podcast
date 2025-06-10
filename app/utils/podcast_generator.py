@@ -180,6 +180,41 @@ class PodcastGenerator:
         """
         self.client = genai.Client(api_key=api_key)
 
+    def split_script(self, script: str, max_chars: int = 3000) -> List[str]:
+        """
+        Split a script into smaller chunks based on character count, breaking at newlines.
+        
+        Args:
+            script: The script text to split
+            max_chars: Maximum characters per chunk (default: 3000)
+            
+        Returns:
+            List of script chunks
+        """
+        if not script or not script.strip():
+            return []
+            
+        if len(script) <= max_chars:
+            return [script]
+        
+        chunks = []
+        current_chunk = ""
+        lines = script.split('\n')
+        
+        for line in lines:
+            # Check if adding this line would exceed the limit
+            if len(current_chunk) + len(line) + 1 > max_chars and current_chunk:
+                chunks.append(current_chunk.rstrip())
+                current_chunk = line + '\n'
+            else:
+                current_chunk += line + '\n'
+        
+        # Add the last chunk if it has content
+        if current_chunk.strip():
+            chunks.append(current_chunk.rstrip())
+        
+        return chunks
+
     def generate_script(self, chunk: Dict[str, Any]) -> str:
         """
         Generate a podcast script from a markdown chunk.
@@ -322,25 +357,44 @@ class PodcastGenerator:
         def script_task(args):
             i, chunk = args
             script = self.generate_script(chunk)
-            script_file = os.path.join(scripts_dir, f"chunk_{i}.txt")
-            with open(script_file, "w", encoding="utf-8") as f:
-                f.write(script)
-            return (i, script)
+            
+            # スクリプトを分割
+            script_chunks = self.split_script(script)
+            
+            # 分割されたスクリプトをファイル保存
+            saved_scripts = []
+            for j, script_chunk in enumerate(script_chunks):
+                if len(script_chunks) == 1:
+                    script_file = os.path.join(scripts_dir, f"chunk_{i}.txt")
+                else:
+                    script_file = os.path.join(scripts_dir, f"chunk_{i}_{j+1}.txt")
+                    
+                with open(script_file, "w", encoding="utf-8") as f:
+                    f.write(script_chunk)
+                saved_scripts.append((f"{i}_{j+1}" if len(script_chunks) > 1 else str(i), script_chunk))
+            
+            return saved_scripts
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
             script_results = list(executor.map(script_task, [(i, chunk) for i, chunk in enumerate(chunks)]))
+        
+        # フラットな結果リストに変換
+        all_scripts = []
+        for result_list in script_results:
+            all_scripts.extend(result_list)
+        
         # インデックス順に並べ直す
-        script_results.sort(key=lambda x: x[0])
-        scripts = [s for _, s in script_results]
+        all_scripts.sort(key=lambda x: x[0])
+        scripts = [s for _, s in all_scripts]
 
         # TTS（音声生成）も並列でやる！
         def tts_task(args):
-            i, script = args
-            temp_file = os.path.join(audio_chunks_dir, f"chunk_{i}")
-            return (i, self.generate_audio(script, temp_file))
+            index, script = args
+            temp_file = os.path.join(audio_chunks_dir, f"chunk_{index}")
+            return (index, self.generate_audio(script, temp_file))
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            audio_results = list(executor.map(tts_task, [(i, scripts[i]) for i in range(len(scripts))]))
+            audio_results = list(executor.map(tts_task, [(all_scripts[i][0], scripts[i]) for i in range(len(scripts))]))
         # インデックス順に並べ直す
         audio_results.sort(key=lambda x: x[0])
         audio_files = [f for _, f in audio_results if f]
