@@ -10,22 +10,20 @@ from google.genai import types
 from pydub import AudioSegment
 
 PODCAST_SCRIPT_PROMPT = """
-エンジニアの中島聡さんのメルマガ「週刊Life is beautiful」からポッドキャスト用の台本を作成したいです。
-以下のルールに従ってPodCast用の台本を生成してください 
+ルールに従って、「## 原稿のもととなる内容」からエンジニアの中島聡さんのポッドキャスト「週刊Life is beautiful」の台本を作成してください。
 
 ## ポッドキャストの内容
-- 中島聡さんにアナウンサーのMinamiがインタビューする形で中島聡さんのメルマガ「週刊Life is beautiful」を毎週詳しく、わかりやすく視聴者に紹介する番組
+- 中島聡さんにアナウンサーのMinamiがインタビューする形のポッドキャスト。タイトル「週刊Life is beautiful」
 - スピーカーのキャラクター
 	- Nakajima：中島聡(ナカジマ サトシ)さん（1960年生まれ）は、日本を代表するエンジニア・起業家・エンジェル投資家です。マイクロソフト本社でWindows 95やInternet Explorerの開発責任者を務め、「Windows 95の父」と呼ばれました。2000年に起業したソフトウェア会社Xevoを2019年に売却後、シンギュラリティ・ソサエティ代表として活動。投資家としても、NVIDIAなど将来有望な企業に早くから投資し、自身の著書で「メタトレンド投資」の手法を紹介しています
 	- Minami：アナウンサー。若いが知性を感じる話し方。
-- 『週刊Life is beautiful』とは
-    - 『週刊Life is beautiful』は、中島聡(ナカジマ サトシ)さんが2011年から発行している有料メールマガジンです。主に「エンジニアのための経営学講座」を中心に、世界に通用するエンジニアになるための勉強法や時間の使い方、最新技術、ITビジネス、ベンチャー、キャリア設計、日米の違いなど幅広い話題を毎週火曜日に配信しています。冷静で分かりやすい筆致と豊富な知見で、読者1万人超の人気を誇ります
+- 『週刊Life is beautiful』は、中島聡(ナカジマ サトシ)さんが発行するポッドキャスト。主に「エンジニアのための経営学講座」を中心に、世界に通用するエンジニアになるための勉強法や時間の使い方、最新技術、ITビジネス、ベンチャー、キャリア設計、日米の違いなど幅広い話題を毎週火曜日に配信。冷静で分かりやすい思考と豊富な知見で、リスナー1万人超の人気を誇る
 
 ## ルール
 - 話者ラベルはMinami/Nakajimaの２名のみ
 - フィラー（えーっと、うんうん、そうですね等）を適度に挿入する 
 - 区切りごとに[pause 0.6sec]を入れて間を取る 
-- 中島聡さんのメルマガは量が多いため、分割して台本生成が依頼されます。
+- 「原稿のもととなる内容」は量が多いため、分割して台本生成が依頼されます。
 	- Index: STARTのときは番組冒頭の原稿をつくるときです。
         ポッドキャスト（番組）のオープニングトークから台本を生成してください。スムーズに次のコーナーに移るように余計な総括や、次コーナーへの導入は不要です。
 	- Index: STARTでもENDではないときは、番組の途中部分の台本を作成するときです。
@@ -33,16 +31,17 @@ PODCAST_SCRIPT_PROMPT = """
 	- Index: ENDのときは番組のラストパートの原稿を作る時です。
         ポッドキャスト（番組）全体のエンディングトークも生成してください。
 - 最後の文章には[pause 1.0sec]の長めのpauseを入れる。
+- 元の内容は一切割愛せず、すべての内容、発言をトランスクリプトに含める
 
 ## 出力例
 
 Index: START（番組冒頭の原稿をつくる）のとき
 ```
-Minami: さあ、今週もポッドキャストが始まりますね。[pause 0.6sec]
+Minami: さあ、今週もポッドキャスト「週刊Life is beautiful」が始まりますね。[pause 0.6sec]
 
 Nakajima: はい、よろしくお願いします。[pause 0.6sec]
 
-Minami: Nakajimaさん、今週も早速、中島聡さんのメルマガ「週刊Life is beautiful」を深掘りしていきましょう。[pause 0.6sec] 今週号、まず最初のトピックはXXですね？
+Minami: Nakajimaさん、今週の最初のトピックはXXですね？
 
 ~
 
@@ -65,7 +64,7 @@ Minami: さあ、次のコーナーはXXについてです。[pause 0.6sec]
 
 ~
 
-Minami: それでは、今週の「週刊Life is beautiful拾い読みポッドキャスト」はここまでとさせていただきます。[pause 0.6sec] リスナーの皆さん、最後までお聴きいただき、ありがとうございました。
+Minami: それでは、今週の「週刊Life is beautiful」はここまでとさせていただきます。[pause 0.6sec] リスナーの皆さん、最後までお聴きいただき、ありがとうございました。
 
 Nakajima: ありがとうございました。
 
@@ -76,7 +75,7 @@ Minami: また来週、お会いしましょう。[pause 1.0sec]
 # 作成する原稿のIndex
 Index: {index}
 
-## 原稿のもととなるメルマガの内容
+## 原稿のもととなる内容
 {content}
 """
 
@@ -183,36 +182,36 @@ class PodcastGenerator:
     def split_script(self, script: str, max_chars: int = 3000) -> List[str]:
         """
         Split a script into smaller chunks based on character count, breaking at newlines.
-        
+
         Args:
             script: The script text to split
             max_chars: Maximum characters per chunk (default: 3000)
-            
+
         Returns:
             List of script chunks
         """
         if not script or not script.strip():
             return []
-            
+
         if len(script) <= max_chars:
             return [script]
-        
+
         chunks = []
         current_chunk = ""
-        lines = script.split('\n')
-        
+        lines = script.split("\n")
+
         for line in lines:
             # Check if adding this line would exceed the limit
             if len(current_chunk) + len(line) + 1 > max_chars and current_chunk:
                 chunks.append(current_chunk.rstrip())
-                current_chunk = line + '\n'
+                current_chunk = line + "\n"
             else:
-                current_chunk += line + '\n'
-        
+                current_chunk += line + "\n"
+
         # Add the last chunk if it has content
         if current_chunk.strip():
             chunks.append(current_chunk.rstrip())
-        
+
         return chunks
 
     def generate_script(self, chunk: Dict[str, Any]) -> str:
@@ -227,7 +226,7 @@ class PodcastGenerator:
         """
         prompt = PODCAST_SCRIPT_PROMPT.format(index=chunk["index"], content=chunk["content"])
         logger.info(f"Generating script for chunk index: {chunk['index']}")
-        model = "gemini-2.5-flash-preview-05-20"
+        model = "gemini-3-pro-preview"
         response = self.client.models.generate_content(model=model, contents=[types.Content(parts=[types.Part(text=prompt)])])
         logger.info(f"Script generated for chunk index: {chunk['index']}")
         return response.text
@@ -357,32 +356,32 @@ class PodcastGenerator:
         def script_task(args):
             i, chunk = args
             script = self.generate_script(chunk)
-            
+
             # スクリプトを分割
             script_chunks = self.split_script(script)
-            
+
             # 分割されたスクリプトをファイル保存
             saved_scripts = []
             for j, script_chunk in enumerate(script_chunks):
                 if len(script_chunks) == 1:
                     script_file = os.path.join(scripts_dir, f"chunk_{i}.txt")
                 else:
-                    script_file = os.path.join(scripts_dir, f"chunk_{i}_{j+1}.txt")
-                    
+                    script_file = os.path.join(scripts_dir, f"chunk_{i}_{j + 1}.txt")
+
                 with open(script_file, "w", encoding="utf-8") as f:
                     f.write(script_chunk)
-                saved_scripts.append((f"{i}_{j+1}" if len(script_chunks) > 1 else str(i), script_chunk))
-            
+                saved_scripts.append((f"{i}_{j + 1}" if len(script_chunks) > 1 else str(i), script_chunk))
+
             return saved_scripts
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
             script_results = list(executor.map(script_task, [(i, chunk) for i, chunk in enumerate(chunks)]))
-        
+
         # フラットな結果リストに変換
         all_scripts = []
         for result_list in script_results:
             all_scripts.extend(result_list)
-        
+
         # インデックス順に並べ直す
         all_scripts.sort(key=lambda x: x[0])
         scripts = [s for _, s in all_scripts]
