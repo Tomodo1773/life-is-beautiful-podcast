@@ -9,7 +9,7 @@ from google import genai
 from google.genai import types
 from pydub import AudioSegment
 
-PODCAST_SCRIPT_PROMPT = """
+PODCAST_CONTEXT = """
 ルールに従って、「## 原稿のもととなる内容」からエンジニアの中島聡さんのポッドキャスト「週刊Life is beautiful」の台本を作成してください。
 
 ## ポッドキャストの内容
@@ -19,23 +19,21 @@ PODCAST_SCRIPT_PROMPT = """
 	- Minami：アナウンサー。若いが知性を感じる話し方。
 - 『週刊Life is beautiful』は、中島聡(ナカジマ サトシ)さんが発行するポッドキャスト。主に「エンジニアのための経営学講座」を中心に、世界に通用するエンジニアになるための勉強法や時間の使い方、最新技術、ITビジネス、ベンチャー、キャリア設計、日米の違いなど幅広い話題を毎週火曜日に配信。冷静で分かりやすい思考と豊富な知見で、リスナー1万人超の人気を誇る
 
-## ルール
+## 共通ルール
 - 話者ラベルはMinami/Nakajimaの２名のみ
-- フィラー（えーっと、うんうん、そうですね等）を適度に挿入する 
-- 区切りごとに[pause 0.6sec]を入れて間を取る 
-- 「原稿のもととなる内容」は量が多いため、分割して台本生成が依頼されます。
-	- Index: STARTのときは番組冒頭の原稿をつくるときです。
-        ポッドキャスト（番組）のオープニングトークから台本を生成してください。スムーズに次のコーナーに移るように余計な総括や、次コーナーへの導入は不要です。
-	- Index: STARTでもENDではないときは、番組の途中部分の台本を作成するときです。
-        「では、次は～の話題です。」のようにすでに始めっている番組前提で余計な前振りをせずにスムーズに始めてください。また、スムーズに次のコーナーに移るように余計な総括や、次コーナーへの導入は不要です。
-	- Index: ENDのときは番組のラストパートの原稿を作る時です。
-        ポッドキャスト（番組）全体のエンディングトークも生成してください。
-- 最後の文章には[pause 1.0sec]の長めのpauseを入れる。
+- フィラー（えーっと、うんうん、そうですね等）を適度に挿入する
+- 区切りごとに[pause 0.6sec]を入れて間を取る
 - 元の内容は一切割愛せず、すべての内容、発言をトランスクリプトに含める
+- 最後の文章には[pause 1.0sec]の長めのpauseを入れる
+"""
 
-## 出力例
+PODCAST_SCRIPT_PROMPT_START = """
+{context}
 
-Index: START（番組冒頭の原稿をつくる）のとき
+## ルール（冒頭専用）
+- ポッドキャストの開始挨拶を入れる。
+
+## 出力例（冒頭）
 ```
 Minami: さあ、今週もポッドキャスト「週刊Life is beautiful」が始まりますね。[pause 0.6sec]
 
@@ -48,17 +46,33 @@ Minami: Nakajimaさん、今週の最初のトピックはXXですね？
 Minami: 以上、XXについてでした。[pause 1.0sec]
 ```
 
-IndexがSTARTでもENDでもなく番組途中の原稿の時
+## 原稿のもととなる内容
+{content}
+"""
+
+PODCAST_SCRIPT_PROMPT_MID = """
+{context}
+
+## 出力例（途中）
 ```
 Minami: さあ、次のコーナーは～についてです。[pause 0.6sec]
 
 ~
 
 Minami: 以上、XXについてでした。[pause 1.0sec]
-
 ```
 
-IndexがENDのとき
+## 原稿のもととなる内容
+{content}
+"""
+
+PODCAST_SCRIPT_PROMPT_END = """
+{context}
+
+## ルール（エンディング専用）
+- 番組全体の締めくくりを行い、感謝と次回案内を入れる。
+
+## 出力例（エンディング）
 ```
 Minami: さあ、次のコーナーはXXについてです。[pause 0.6sec]
 
@@ -70,10 +84,6 @@ Nakajima: ありがとうございました。
 
 Minami: また来週、お会いしましょう。[pause 1.0sec]
 ```
-
-
-# 作成する原稿のIndex
-Index: {index}
 
 ## 原稿のもととなる内容
 {content}
@@ -179,6 +189,17 @@ class PodcastGenerator:
         """
         self.client = genai.Client(api_key=api_key)
 
+    def _select_prompt_template(self, index: str) -> str:
+        """
+        Select prompt template by index semantic type.
+        """
+        key = (index or "").strip().upper()
+        if key == "START":
+            return PODCAST_SCRIPT_PROMPT_START
+        if key == "END":
+            return PODCAST_SCRIPT_PROMPT_END
+        return PODCAST_SCRIPT_PROMPT_MID
+
     def split_script(self, script: str, max_chars: int = 3000) -> List[str]:
         """
         Split a script into smaller chunks based on character count, breaking at newlines.
@@ -224,7 +245,8 @@ class PodcastGenerator:
         Returns:
             Generated podcast script
         """
-        prompt = PODCAST_SCRIPT_PROMPT.format(index=chunk["index"], content=chunk["content"])
+        prompt_template = self._select_prompt_template(chunk.get("index"))
+        prompt = prompt_template.format(context=PODCAST_CONTEXT, content=chunk.get("content"))
         logger.info(f"Generating script for chunk index: {chunk['index']}")
         model = "gemini-3-pro-preview"
         response = self.client.models.generate_content(model=model, contents=[types.Content(parts=[types.Part(text=prompt)])])
