@@ -28,7 +28,7 @@
 
 ### 前提条件
 
-- Python 3.8以上
+- Python 3.12以上
 - Gemini APIキー
 - uv (パッケージマネージャー)
 
@@ -59,6 +59,20 @@ pre-commit install
 
 ```env
 GEMINI_API_KEY=your_gemini_api_key
+```
+
+必要に応じて、並行数/リトライも環境変数で調整できます（デフォルトは `SCRIPT_CONCURRENCY=20`, `TTS_CONCURRENCY=5`）：
+
+```env
+# 台本生成（Gemini）同時実行数
+SCRIPT_CONCURRENCY=20
+
+# TTS同時実行数
+TTS_CONCURRENCY=5
+
+# 429/5xx 等のリトライ回数と待ち時間上限（指数バックオフ）
+GEMINI_MAX_RETRIES=8
+GEMINI_RETRY_MAX_SECONDS=60
 ```
 
 ### 実行

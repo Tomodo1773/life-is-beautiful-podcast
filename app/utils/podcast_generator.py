@@ -1,11 +1,15 @@
-import concurrent.futures
+import asyncio
+from dataclasses import dataclass
 import logging
 import mimetypes
 import os
+import random
 import struct
-from typing import Any, Dict, List
+from collections.abc import Awaitable, Callable
+from typing import Any, Dict, List, TypeVar
 
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 from pydub import AudioSegment
 
@@ -53,6 +57,13 @@ Minami: 以上、XXについてでした。[pause 1.0sec]
 PODCAST_SCRIPT_PROMPT_MID = """
 {context}
 
+## ルール（番組中間専用）
+- すでに番組は開始しており、途中のコーナーであることを意識する。
+- 「さあ、次のコーナーは～についてです。」から始める。
+- 最後は「以上、XXについてでした。」で締める。
+- 「今週もポッドキャスト「週刊Life is beautiful」が始まりますね。」や「よろしくお願いします。」などの開始挨拶は入れない。
+
+
 ## 出力例（途中）
 ```
 Minami: さあ、次のコーナーは～についてです。[pause 0.6sec]
@@ -97,6 +108,88 @@ PODCAST_CREATION_PROMPT = """
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+
+
+@dataclass(frozen=True)
+class RetryConfig:
+    max_retries: int = 8
+    initial_delay_seconds: float = 1.0
+    max_delay_seconds: float = 60.0
+    backoff_factor: float = 2.0
+    jitter_ratio: float = 0.2
+
+
+T = TypeVar("T")
+
+
+def _extract_status_code(exc: BaseException) -> int | None:
+    code = getattr(exc, "code", None)
+    if isinstance(code, int):
+        return code
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int):
+        return status_code
+    return None
+
+
+def _is_retryable_exception(exc: BaseException) -> bool:
+    if isinstance(exc, genai_errors.APIError):
+        code = _extract_status_code(exc)
+        if code in {429, 500, 502, 503, 504}:
+            return True
+    code = _extract_status_code(exc)
+    if code in {429, 500, 502, 503, 504}:
+        return True
+    return isinstance(exc, (TimeoutError, OSError, ConnectionError, asyncio.TimeoutError))
+
+
+def _extract_retry_delay_seconds(exc: BaseException) -> float | None:
+    retry_delay = getattr(exc, "retry_delay", None) or getattr(exc, "retryDelay", None)
+    if retry_delay is None:
+        return None
+    if isinstance(retry_delay, (int, float)):
+        return float(retry_delay)
+    total_seconds = getattr(retry_delay, "total_seconds", None)
+    if callable(total_seconds):
+        try:
+            return float(total_seconds())
+        except Exception:
+            return None
+    return None
+
+
+async def _call_with_retry_async(
+    *,
+    operation: str,
+    attempt_once: Callable[[], Awaitable[T]],
+    retry: RetryConfig,
+) -> T:
+    delay = retry.initial_delay_seconds
+    attempt = 0
+    while True:
+        try:
+            return await attempt_once()
+        except Exception as exc:
+            attempt += 1
+            if attempt > retry.max_retries or not _is_retryable_exception(exc):
+                raise
+
+            retry_after = _extract_retry_delay_seconds(exc)
+            sleep_seconds = min(retry_after if retry_after is not None else delay, retry.max_delay_seconds)
+            sleep_seconds += random.uniform(0.0, sleep_seconds * retry.jitter_ratio)
+
+            code = _extract_status_code(exc)
+            logger.warning(
+                "%s failed (attempt %s/%s, code=%s). Retrying in %.2fs: %s",
+                operation,
+                attempt,
+                retry.max_retries,
+                code,
+                sleep_seconds,
+                exc,
+            )
+            await asyncio.sleep(sleep_seconds)
+            delay = min(delay * retry.backoff_factor, retry.max_delay_seconds)
 
 
 def save_binary_file(file_name: str, data: bytes) -> None:
@@ -235,39 +328,33 @@ class PodcastGenerator:
 
         return chunks
 
-    def generate_script(self, chunk: Dict[str, Any]) -> str:
-        """
-        Generate a podcast script from a markdown chunk.
+    async def generate_script_async(self, chunk: Dict[str, Any], *, retry: RetryConfig | None = None) -> str:
+        retry = retry or RetryConfig()
 
-        Args:
-            chunk: Dictionary with 'index' and 'content' keys
-
-        Returns:
-            Generated podcast script
-        """
         prompt_template = self._select_prompt_template(chunk.get("index"))
         prompt = prompt_template.format(context=PODCAST_CONTEXT, content=chunk.get("content"))
-        logger.info(f"Generating script for chunk index: {chunk['index']}")
+        logger.info("Generating script (async) for chunk index: %s", chunk.get("index"))
         model = "gemini-3-pro-preview"
-        response = self.client.models.generate_content(model=model, contents=[types.Content(parts=[types.Part(text=prompt)])])
-        logger.info(f"Script generated for chunk index: {chunk['index']}")
-        return response.text
 
-    def generate_audio(self, script: str, output_file: str) -> str:
-        """
-        Generate audio from a podcast script using Gemini TTS.
+        async def attempt_once() -> str:
+            response = await self.client.aio.models.generate_content(
+                model=model, contents=[types.Content(parts=[types.Part(text=prompt)])]
+            )
+            if not getattr(response, "text", None):
+                raise RuntimeError("Gemini generate_content returned empty text")
+            return response.text
 
-        Args:
-            script: The podcast script
-            output_file: Path to save the audio file
+        script = await _call_with_retry_async(operation="generate_script", attempt_once=attempt_once, retry=retry)
+        logger.info("Script generated (async) for chunk index: %s", chunk.get("index"))
+        return script
 
-        Returns:
-            Path to the generated audio file
-        """
+    async def generate_audio_async(self, script: str, output_file: str, *, retry: RetryConfig | None = None) -> str:
+        retry = retry or RetryConfig()
+
         model = "gemini-2.5-flash-preview-tts"
 
         speaker_config = []
-        speakers = {"Minami", "Nakajima"}
+        speakers = ["Minami", "Nakajima"]
 
         voice_mapping = {
             "Minami": "Zephyr",  # Female voice for Minami
@@ -286,10 +373,8 @@ class PodcastGenerator:
 
         prompt = PODCAST_CREATION_PROMPT.format(script=script)
 
-        # スクリプトもtmp/scripts配下に保存する！
         scripts_dir = os.path.join("tmp", "scripts")
         os.makedirs(scripts_dir, exist_ok=True)
-        # output_fileのファイル名部分を使って保存
         script_filename = os.path.basename(output_file) + ".txt"
         script_path = os.path.join(scripts_dir, script_filename)
         with open(script_path, "w", encoding="utf-8") as f:
@@ -305,30 +390,36 @@ class PodcastGenerator:
             ),
         )
 
-        logger.info("Generating audio for podcast script")
-        for chunk in self.client.models.generate_content_stream(
-            model=model, contents=contents, config=generate_content_config
-        ):
-            if chunk.candidates is None or chunk.candidates[0].content is None or chunk.candidates[0].content.parts is None:
-                continue
+        async def attempt_once() -> str:
+            logger.info("Generating audio (async) for podcast script")
+            stream = await self.client.aio.models.generate_content_stream(
+                model=model, contents=contents, config=generate_content_config
+            )
 
-            if chunk.candidates[0].content.parts[0].inline_data:
-                inline_data = chunk.candidates[0].content.parts[0].inline_data
-                data_buffer = inline_data.data
-                file_extension = mimetypes.guess_extension(inline_data.mime_type)
+            async for chunk in stream:
+                if (
+                    chunk.candidates is None
+                    or chunk.candidates[0].content is None
+                    or chunk.candidates[0].content.parts is None
+                ):
+                    continue
 
-                if file_extension is None:
-                    file_extension = ".wav"
-                    data_buffer = convert_to_wav(inline_data.data, inline_data.mime_type)
+                if chunk.candidates[0].content.parts[0].inline_data:
+                    inline_data = chunk.candidates[0].content.parts[0].inline_data
+                    data_buffer = inline_data.data
+                    file_extension = mimetypes.guess_extension(inline_data.mime_type)
 
-                save_binary_file(f"{output_file}{file_extension}", data_buffer)
-                logger.info(f"Audio file generated: {output_file}{file_extension}")
-                return f"{output_file}{file_extension}"
-            else:
-                logger.info(f"Text chunk: {chunk.text}")
+                    if file_extension is None:
+                        file_extension = ".wav"
+                        data_buffer = convert_to_wav(inline_data.data, inline_data.mime_type)
 
-        logger.error("Audio generation failed: No audio data returned")
-        return None
+                    save_binary_file(f"{output_file}{file_extension}", data_buffer)
+                    logger.info("Audio file generated (async): %s%s", output_file, file_extension)
+                    return f"{output_file}{file_extension}"
+
+            raise RuntimeError("Audio generation failed: No audio data returned")
+
+        return await _call_with_retry_async(operation="generate_audio", attempt_once=attempt_once, retry=retry)
 
     def concatenate_audio_files(self, audio_files: List[str], output_file: str) -> str:
         """
@@ -355,72 +446,3 @@ class PodcastGenerator:
         combined.export(output_file, format="wav")
         logger.info(f"Concatenated audio file saved: {output_file}")
         return output_file
-
-    def process_markdown_chunks(self, chunks: List[Dict[str, Any]]) -> str:
-        """
-        Process markdown chunks to generate a complete podcast.
-
-        Args:
-            chunks: List of dictionaries with 'index' and 'content' keys
-
-        Returns:
-            Path to the final podcast file
-        """
-        base_output_dir = "tmp"
-        scripts_dir = os.path.join(base_output_dir, "scripts")
-        audio_chunks_dir = os.path.join(base_output_dir, "audio_chunks")
-        final_audio_dir = os.path.join(base_output_dir, "final_audio")
-        os.makedirs(scripts_dir, exist_ok=True)
-        os.makedirs(audio_chunks_dir, exist_ok=True)
-        os.makedirs(final_audio_dir, exist_ok=True)
-
-        # スクリプト生成も並列でやる！
-        def script_task(args):
-            i, chunk = args
-            script = self.generate_script(chunk)
-
-            # スクリプトを分割
-            script_chunks = self.split_script(script)
-
-            # 分割されたスクリプトをファイル保存
-            saved_scripts = []
-            for j, script_chunk in enumerate(script_chunks):
-                if len(script_chunks) == 1:
-                    script_file = os.path.join(scripts_dir, f"chunk_{i}.txt")
-                else:
-                    script_file = os.path.join(scripts_dir, f"chunk_{i}_{j + 1}.txt")
-
-                with open(script_file, "w", encoding="utf-8") as f:
-                    f.write(script_chunk)
-                saved_scripts.append((f"{i}_{j + 1}" if len(script_chunks) > 1 else str(i), script_chunk))
-
-            return saved_scripts
-
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            script_results = list(executor.map(script_task, [(i, chunk) for i, chunk in enumerate(chunks)]))
-
-        # フラットな結果リストに変換
-        all_scripts = []
-        for result_list in script_results:
-            all_scripts.extend(result_list)
-
-        # インデックス順に並べ直す
-        all_scripts.sort(key=lambda x: x[0])
-        scripts = [s for _, s in all_scripts]
-
-        # TTS（音声生成）も並列でやる！
-        def tts_task(args):
-            index, script = args
-            temp_file = os.path.join(audio_chunks_dir, f"chunk_{index}")
-            return (index, self.generate_audio(script, temp_file))
-
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            audio_results = list(executor.map(tts_task, [(all_scripts[i][0], scripts[i]) for i in range(len(scripts))]))
-        # インデックス順に並べ直す
-        audio_results.sort(key=lambda x: x[0])
-        audio_files = [f for _, f in audio_results if f]
-
-        if audio_files:
-            final_podcast = os.path.join(final_audio_dir, "final_podcast.wav")
-            return self.concatenate_audio_files(audio_files, final_podcast)
-        return None

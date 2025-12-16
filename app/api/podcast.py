@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.utils.markdown_processor import split_markdown_advanced
-from app.utils.podcast_generator import PodcastGenerator
+from app.utils.podcast_generator import PodcastGenerator, RetryConfig
 
 logger = logging.getLogger("app.api.podcast")
 
@@ -72,6 +72,11 @@ async def process_podcast_background(job_id: str, markdown_content: str, output_
         chunk_dir = os.path.join("tmp", "chunks")
         chunks = split_markdown_advanced(markdown_content, save_dir=chunk_dir)
         chunk_count = len(chunks)
+
+        os.makedirs(os.path.join("tmp", "audio_chunks"), exist_ok=True)
+        os.makedirs(os.path.join("tmp", "final_audio"), exist_ok=True)
+        os.makedirs(os.path.join("tmp", "scripts"), exist_ok=True)
+
         status = ProcessingStatus(
             job_id=job_id, status="processing", progress=0.0, chunk_count=chunk_count, script_done=0, tts_done=0
         )
@@ -80,25 +85,60 @@ async def process_podcast_background(job_id: str, markdown_content: str, output_
         generator = PodcastGenerator(api_key=api_key)
         logger.info(f"[Job {job_id}] PodcastGenerator initialized")
 
-        # スクリプト生成
-        scripts = []
-        for i, chunk in enumerate(chunks):
-            script = await asyncio.to_thread(generator.generate_script, chunk)
-            scripts.append(script)
-            status.script_done = i + 1
-            status.progress = 0.1 + 0.3 * (i + 1) / chunk_count
-            save_status_to_file(job_id, status)
+        script_concurrency = int(os.environ.get("SCRIPT_CONCURRENCY", "20"))
+        tts_concurrency = int(os.environ.get("TTS_CONCURRENCY", "5"))
+        max_retries = int(os.environ.get("GEMINI_MAX_RETRIES", "8"))
+        retry_max_seconds = float(os.environ.get("GEMINI_RETRY_MAX_SECONDS", "60"))
 
-        # TTS生成
-        audio_files = []
-        for i, script in enumerate(scripts):
-            temp_file = os.path.join("tmp/audio_chunks", f"chunk_{i}")
-            audio_file = await asyncio.to_thread(generator.generate_audio, script, temp_file)
-            if audio_file:
-                audio_files.append(audio_file)
-            status.tts_done = i + 1
-            status.progress = 0.4 + 0.5 * (i + 1) / chunk_count
-            save_status_to_file(job_id, status)
+        retry = RetryConfig(max_retries=max_retries, max_delay_seconds=retry_max_seconds)
+
+        script_sem = asyncio.Semaphore(max(1, min(script_concurrency, chunk_count or 1)))
+        tts_sem = asyncio.Semaphore(max(1, min(tts_concurrency, chunk_count or 1)))
+        status_lock = asyncio.Lock()
+
+        def recompute_progress() -> float:
+            if not chunk_count:
+                return 0.0
+            # 0.0-0.9: script(0.3) + tts(0.6) + base(0.0). 連結で1.0にする。
+            return min(0.9, 0.3 * (status.script_done / chunk_count) + 0.6 * (status.tts_done / chunk_count))
+
+        async def mark_script_done() -> None:
+            async with status_lock:
+                status.script_done += 1
+                status.progress = recompute_progress()
+                save_status_to_file(job_id, status)
+
+        async def mark_tts_done() -> None:
+            async with status_lock:
+                status.tts_done += 1
+                status.progress = recompute_progress()
+                save_status_to_file(job_id, status)
+
+        async def process_one_chunk(i: int, chunk) -> tuple[int, str]:
+            async with script_sem:
+                script = await generator.generate_script_async(chunk, retry=retry)
+            await mark_script_done()
+
+            async with tts_sem:
+                temp_file = os.path.join("tmp", "audio_chunks", f"chunk_{i}")
+                audio_file = await generator.generate_audio_async(script, temp_file, retry=retry)
+            await mark_tts_done()
+
+            if not audio_file:
+                raise RuntimeError(f"Audio generation returned empty result for chunk {i}")
+            return i, audio_file
+
+        indexed_files: list[tuple[int, str]] = []
+
+        async def run_and_collect(i: int, chunk) -> None:
+            indexed_files.append(await process_one_chunk(i, chunk))
+
+        async with asyncio.TaskGroup() as tg:
+            for i, chunk in enumerate(chunks):
+                tg.create_task(run_and_collect(i, chunk))
+
+        indexed_files.sort(key=lambda x: x[0])
+        audio_files = [f for _, f in indexed_files]
 
         # 連結
         if audio_files:
