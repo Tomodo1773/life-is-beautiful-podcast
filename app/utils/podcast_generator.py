@@ -5,6 +5,7 @@ import mimetypes
 import os
 import random
 import struct
+import wave
 from collections.abc import Awaitable, Callable
 from typing import Any, Dict, List, TypeVar
 
@@ -81,6 +82,8 @@ PODCAST_SCRIPT_PROMPT_END = """
 {context}
 
 ## ルール（エンディング専用）
+- すでに番組は開始しており、最後のコーナーであることを意識する。
+- 「さて、最後のコーナーですが、～についてです。」から始める。
 - 番組全体の締めくくりを行い、感謝と次回案内を入れる。
 
 ## 出力例（エンディング）
@@ -437,12 +440,45 @@ class PodcastGenerator:
             return None
 
         logger.info(f"Concatenating {len(audio_files)} audio files")
-        combined = AudioSegment.from_file(audio_files[0])
 
-        for audio_file in audio_files[1:]:
-            sound = AudioSegment.from_file(audio_file)
-            combined += sound
+        # waveモジュールでストリーミング連結してメモリ使用を抑える
+        try:
+            with wave.open(audio_files[0], "rb") as first_wav:
+                params = first_wav.getparams()
+        except wave.Error:
+            logger.exception("Failed to read first audio file: %s", audio_files[0])
+            return None
 
-        combined.export(output_file, format="wav")
+        try:
+            with wave.open(output_file, "wb") as out_wav:
+                out_wav.setparams(params)
+
+                for audio_file in audio_files:
+                    try:
+                        with wave.open(audio_file, "rb") as src:
+                            if (
+                                src.getnchannels() != params.nchannels
+                                or src.getframerate() != params.framerate
+                                or src.getsampwidth() != params.sampwidth
+                            ):
+                                logger.error(
+                                    "Audio params mismatch in %s; expected %s", audio_file, params
+                                )
+                                return None
+
+                            # 64KB相当のフレーム単位で読み書きして常時メモリを抑制
+                            frames_per_chunk = 65536
+                            while True:
+                                chunk = src.readframes(frames_per_chunk)
+                                if not chunk:
+                                    break
+                                out_wav.writeframes(chunk)
+                    except wave.Error:
+                        logger.exception("Failed to read audio file: %s", audio_file)
+                        return None
+        except wave.Error:
+            logger.exception("Failed to write concatenated audio file: %s", output_file)
+            return None
+
         logger.info(f"Concatenated audio file saved: {output_file}")
         return output_file
