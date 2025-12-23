@@ -12,6 +12,7 @@ from typing import Any, Dict, List, TypeVar
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
+from mutagen.id3 import APIC, ID3, ID3NoHeaderError, TALB, TIT2, TPE1
 from pydub import AudioSegment
 
 PODCAST_CONTEXT = """
@@ -461,9 +462,7 @@ class PodcastGenerator:
                                 or src.getframerate() != params.framerate
                                 or src.getsampwidth() != params.sampwidth
                             ):
-                                logger.error(
-                                    "Audio params mismatch in %s; expected %s", audio_file, params
-                                )
+                                logger.error("Audio params mismatch in %s; expected %s", audio_file, params)
                                 return None
 
                             # 64KB相当のフレーム単位で読み書きして常時メモリを抑制
@@ -482,3 +481,67 @@ class PodcastGenerator:
 
         logger.info(f"Concatenated audio file saved: {output_file}")
         return output_file
+
+    def export_mp3_with_metadata(
+        self, wav_file: str, mp3_file: str, title: str, artist: str, album: str, cover_path: str
+    ) -> str:
+        """
+        Export a WAV file to MP3 with ID3 metadata (title, artist, cover).
+
+        Args:
+            wav_file: Source WAV path
+            mp3_file: Destination MP3 path
+            title: Title tag for ID3 metadata
+            artist: Artist tag for ID3 metadata
+            album: Album tag for ID3 metadata
+            cover_path: Cover image path for ID3 metadata
+
+        Returns:
+            Path to the exported MP3 file
+        """
+        try:
+            audio = AudioSegment.from_wav(wav_file)
+            audio.export(mp3_file, format="mp3", tags={"title": title, "artist": artist, "album": album})
+        except Exception:
+            logger.exception("Failed to export MP3: %s", mp3_file)
+            return None
+
+        try:
+            try:
+                tags = ID3(mp3_file)
+            except ID3NoHeaderError:
+                tags = ID3()
+
+            tags.delall("TIT2")
+            tags.delall("TPE1")
+            tags.delall("TALB")
+            tags.add(TIT2(encoding=3, text=title))
+            tags.add(TPE1(encoding=3, text=artist))
+            tags.add(TALB(encoding=3, text=album))
+
+            if cover_path and os.path.exists(cover_path):
+                mime_type, _ = mimetypes.guess_type(cover_path)
+                if not mime_type:
+                    mime_type = "image/png"
+                with open(cover_path, "rb") as f:
+                    cover_data = f.read()
+                tags.delall("APIC")
+                tags.add(
+                    APIC(
+                        encoding=3,
+                        mime=mime_type,
+                        type=3,
+                        desc="cover",
+                        data=cover_data,
+                    )
+                )
+            else:
+                logger.warning("Cover image not found, skipping artwork: %s", cover_path)
+
+            tags.save(mp3_file, v2_version=3)
+        except Exception:
+            logger.exception("Failed to embed ID3 metadata: %s", mp3_file)
+            return None
+
+        logger.info("MP3 exported with metadata: %s", mp3_file)
+        return mp3_file

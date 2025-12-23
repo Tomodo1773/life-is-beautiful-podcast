@@ -57,7 +57,16 @@ def load_status_from_file(job_id: str) -> Optional[ProcessingStatus]:
         return ProcessingStatus.parse_raw(data)
 
 
-async def process_podcast_background(job_id: str, markdown_content: str, output_dir: str, api_key: str):
+async def process_podcast_background(
+    job_id: str,
+    markdown_content: str,
+    output_dir: str,
+    api_key: str,
+    title: str,
+    artist: str,
+    album: str,
+    cover_path: str,
+):
     """
     Process podcast generation in the background.
 
@@ -142,13 +151,19 @@ async def process_podcast_background(job_id: str, markdown_content: str, output_
 
         # 連結
         if audio_files:
-            final_podcast = os.path.join("tmp/final_audio", "final_podcast.wav")
-            await asyncio.to_thread(generator.concatenate_audio_files, audio_files, final_podcast)
+            final_wav = os.path.join("tmp/final_audio", "final_podcast.wav")
+            await asyncio.to_thread(generator.concatenate_audio_files, audio_files, final_wav)
+            final_mp3 = os.path.join("tmp/final_audio", "final_podcast.mp3")
+            exported = await asyncio.to_thread(
+                generator.export_mp3_with_metadata, final_wav, final_mp3, title, artist, album, cover_path
+            )
+            if not exported:
+                raise RuntimeError("MP3 export failed")
             status.status = "completed"
             status.progress = 1.0
-            status.result_file = final_podcast
+            status.result_file = final_mp3
             save_status_to_file(job_id, status)
-            logger.info(f"[Job {job_id}] Podcast generation completed: {final_podcast}")
+            logger.info(f"[Job {job_id}] Podcast generation completed: {final_mp3}")
         else:
             status.status = "failed"
             status.error = "Failed to generate podcast"
@@ -181,6 +196,8 @@ async def generate_podcast(background_tasks: BackgroundTasks, file: UploadFile, 
 
     content = await file.read()
     markdown_content = content.decode("utf-8")
+    base_filename = os.path.splitext(os.path.basename(file.filename))[0]
+    title = base_filename.strip() or "podcast"
 
     job_id = f"job_{os.urandom(8).hex()}"
     logger.info(f"[Job {job_id}] New podcast generation job created")
@@ -189,7 +206,13 @@ async def generate_podcast(background_tasks: BackgroundTasks, file: UploadFile, 
     os.makedirs(output_dir, exist_ok=True)
     logger.info(f"[Job {job_id}] Output directory created: {output_dir}")
 
-    background_tasks.add_task(process_podcast_background, job_id, markdown_content, output_dir, api_key)
+    artist = "中島聡"
+    album = "週刊Life is beautiful"
+    cover_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "podcast_cover.png"))
+
+    background_tasks.add_task(
+        process_podcast_background, job_id, markdown_content, output_dir, api_key, title, artist, album, cover_path
+    )
 
     status = ProcessingStatus(job_id=job_id, status="queued", progress=0.0)
     save_status_to_file(job_id, status)
