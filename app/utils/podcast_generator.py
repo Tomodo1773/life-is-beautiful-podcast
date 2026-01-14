@@ -41,7 +41,7 @@ PODCAST_SCRIPT_PROMPT_START = """
 
 ## 出力例（冒頭）
 ```
-Minami: さあ、今週もポッドキャスト「週刊Life is beautiful」が始まりますね。[pause 0.6sec]
+Minami: さあ、今週もポッドキャスト「週刊Life is beautiful」が始まりますね。元マイクロソフトエンジニアであり、起業家でもあるナカジマサトシさんに話を聞いていきましょう。[pause 0.6sec]
 
 Nakajima: はい、よろしくお願いします。[pause 0.6sec]
 
@@ -106,6 +106,9 @@ Minami: また来週、お会いしましょう。[pause 1.0sec]
 
 PODCAST_CREATION_PROMPT = """
 以下の内容をもとに、親しみやすいトーンで日本語の対話形式ポッドキャスト台本を作ってください。
+
+Minamiの声の特徴> 若手アナウンサー。愛嬌がありながらも、ハキハキした声で聴きやすい話し方。
+Nakajimaの声の特徴> 65歳。落ち着いたトーンで知的な話し方。
 
 {script}
 """
