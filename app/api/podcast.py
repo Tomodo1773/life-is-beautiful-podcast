@@ -29,6 +29,7 @@ class ProcessingStatus(BaseModel):
     chunk_count: Optional[int] = None  # チャンク数
     script_done: Optional[int] = None  # スクリプト生成済み数
     tts_done: Optional[int] = None  # TTS生成済み数
+    download_filename: Optional[str] = None  # ダウンロード時のファイル名
 
 
 def get_gemini_api_key():
@@ -151,9 +152,9 @@ async def process_podcast_background(
 
         # 連結
         if audio_files:
-            final_wav = os.path.join("tmp/final_audio", "final_podcast.wav")
+            final_wav = os.path.join("tmp/final_audio", f"{title}.wav")
             await asyncio.to_thread(generator.concatenate_audio_files, audio_files, final_wav)
-            final_mp3 = os.path.join("tmp/final_audio", "final_podcast.mp3")
+            final_mp3 = os.path.join("tmp/final_audio", f"{title}.mp3")
             exported = await asyncio.to_thread(
                 generator.export_mp3_with_metadata, final_wav, final_mp3, title, artist, album, cover_path
             )
@@ -162,6 +163,7 @@ async def process_podcast_background(
             status.status = "completed"
             status.progress = 1.0
             status.result_file = final_mp3
+            status.download_filename = f"{title}.mp3"
             save_status_to_file(job_id, status)
             logger.info(f"[Job {job_id}] Podcast generation completed: {final_mp3}")
         else:
@@ -267,5 +269,6 @@ async def download_podcast(job_id: str):
         logger.error(f"Podcast file not found for job {job_id}")
         raise HTTPException(status_code=404, detail="Podcast file not found")
 
+    download_filename = status.download_filename or "podcast.mp3"
     logger.info(f"[Job {job_id}] Podcast file download started: {status.result_file}")
-    return FileResponse(status.result_file, media_type="audio/mpeg", filename="podcast.mp3")
+    return FileResponse(status.result_file, media_type="audio/mpeg", filename=download_filename)
