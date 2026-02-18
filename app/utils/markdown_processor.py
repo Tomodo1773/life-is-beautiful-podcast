@@ -13,6 +13,10 @@ def split_markdown_advanced(markdown_content: str, save_dir: str = None) -> List
     その他のセクションは現状維持。
     save_dir: チャンクテキストを保存するディレクトリ（Noneなら保存しない）
     """
+    questions_header = re.search(r"^# 質問コーナー.*$", markdown_content, re.MULTILINE)
+    if questions_header:
+        markdown_content = markdown_content[: questions_header.start()].rstrip() + "\n"
+
     # セクション検出
     zakkubaran_header = re.search(r"^# 今週のざっくばらん.*$", markdown_content, re.MULTILINE)
     articles_header = re.search(r"^# 私の目に止まった記事.*$", markdown_content, re.MULTILINE)

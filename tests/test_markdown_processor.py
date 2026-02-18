@@ -84,6 +84,13 @@ class TestMarkdownProcessor(unittest.TestCase):
         self.assertEqual(chunks[0]["index"], "START")
         self.assertIn("本文だけ", chunks[0]["content"])
 
+    def test_split_markdown_advanced_truncates_questions_section(self):
+        markdown = "# 今週のざっくばらん\n\n## トピック1\n内容1\n\n# 質問コーナー\n質問1\n"
+        chunks = split_markdown_advanced(markdown)
+        self.assertEqual(len(chunks), 1)
+        self.assertIn("トピック1", chunks[0]["content"])
+        self.assertNotIn("質問1", chunks[0]["content"])
+
 
 if __name__ == "__main__":
     unittest.main()
